@@ -12,7 +12,7 @@ List of modules:
 
 Example:
 ### Data
-From [UCI Machine Learning Repositories](https://archive.ics.uci.edu/ml/datasets/Dow+Jones+Index)<sup>1</sup> we obtain weekly price change of 30 US-listed stocks from Jan-2011 to June-2011. So that's a 30 dimensional data with 24 weeks of observation. We will store that in an array x(1:n_date, 1: n), where n_date=24 and n=30. We also have a vector x_index(1:n_date) to save the weekly return of Dow Jones Industrial Average index for the same period.  
+From [UCI Machine Learning Repositories](https://archive.ics.uci.edu/ml/datasets/Dow+Jones+Index)<sup>1</sup> we obtain weekly price change of 30 US-listed stocks from Jan-2011 to June-2011. So that's a 30 dimensional data with 24 weeks of observation. We will store that in an array *x(1:n_date, 1: n)*, where n_date=24 and n=30. We also have a vector *x_index(1:n_date)* to save the weekly return of Dow Jones Industrial Average index for the same period.  
 1. Brown, M. S., Pelosi, M. & Dirska, H. (2013). Dynamic-radius Species-conserving Genetic Algorithm for 
 the Financial Forecasting of Dow Jones Index Stocks. Machine Learning and Data Mining in Pattern 
 Recognition, 7988, 27-41.
@@ -24,10 +24,10 @@ mCovarEst.bas currently has two methods implemented for this task
 x_covar = mCovarEst.SingleIndex(x, x_index)
 x_covar = mCovarEst.Ledoit(x)
 ```
-.SingleIndex uses single index model for the estimation, which requires an input of a benchmark, which is why I had x_index() pulled out previously. Another way is to perform shrinkage estimate using .Lediot, which implements the method from [Ledoit and Wolf, 2003](http://www.ledoit.net/honey.pdf).  Either way x_covar() is a now a nxn matrix.
+.SingleIndex uses single index model for the estimation, which requires an input of a benchmark, which is why I had x_index() pulled out previously. Another way is to perform shrinkage estimate using .Lediot, which implements the method from [Ledoit and Wolf, 2003](http://www.ledoit.net/honey.pdf).  Either way *x_covar()* is a now a nxn matrix.
 
 ### Estimate the expected return
-We will also need to estimate the expected return of each stock, which we just assume to be the geomtric average of historical return, and store it as a vector of size n , i.e. x_mean(1:n).
+We will also need to estimate the expected return of each stock, which we just assume to be the geomtric average of historical return, and store it as a vector of size n , i.e. *x_mean(1:n)*.
 
 ### The actual optimization
 Regardless of how you obtained the expected return and covaraince matrix, that's all the input you need now for the optimizer. Let's go through several scenarios which are plot in the figure above.
