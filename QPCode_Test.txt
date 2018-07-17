@@ -476,3 +476,494 @@ Dim LDL_L() As Double, LDL_D() As Double, tmp_vec() As Double
     Erase z_cu, s_cu, cmax
     Application.StatusBar = False
 End Function
+
+
+
+
+
+
+'Minimize sum_i[sigma_i -tau)^2] where sigma_i= x_i(Qx)_i
+Function Equal_Risk_Port(x() As Double, x_covar() As Double, _
+            Optional x_max As Variant = Null, Optional x_min As Variant = Null, _
+            Optional C_u As Variant = Null, Optional c_max As Variant = Null, _
+            Optional C_l As Variant = Null, Optional c_min As Variant = Null, _
+            Optional iter_max As Long = 1000, Optional tol As Double = 0.000000001) As Boolean
+Dim i As Long, j As Long, k As Long, m As Long, n As Long, iterate As Long, n_cu As Long, n_cl As Long
+Dim Jacob() As Double, f() As Double, Qx() As Double, C() As Double
+Dim tmp_x As Double, tmp_y As Double, tmp_z As Double, z_tol As Double
+Dim sigma As Double, mu As Double, sigma_mu As Double, mu_affin As Double, alpha As Double, alpha_s As Double
+Dim chk1 As Double, chk2 As Double, chk3 As Double, f_chk3() As Double
+Dim chk1_prv As Double, chk2_prv As Double, chk3_prv As Double
+Dim stall_1 As Long, stall_2 As Long, stall_3 As Long
+Dim isMin As Boolean, isMax As Boolean, isMaxC As Boolean
+Dim d() As Double, d_x() As Double
+Dim s_l() As Double, z_l() As Double, d_s_l() As Double, d_z_l() As Double, err_l() As Double, xmin() As Double
+Dim s_u() As Double, z_u() As Double, d_s_u() As Double, d_z_u() As Double, err_u() As Double, xmax() As Double
+Dim s_cu() As Double, z_cu() As Double, d_s_cu() As Double, d_z_cu() As Double, err_cu() As Double, cmax() As Double
+Dim delta_l() As Double, delta_u() As Double, delta_cu() As Double
+Dim LDL_L() As Double, LDL_D() As Double, tmp_vec() As Double
+Dim tau As Double, d_tau As Double, lambda As Double, d_lambda As Double
+    Equal_Risk_Port = False
+    z_tol = 0.000000000000001
+    n = UBound(x_covar, 1)
+    lambda = 0
+    
+    'Check if there is a lower bound on x
+    isMin = False
+    If IsNull(x_min) = False Then
+        isMin = True
+        ReDim xmin(1 To n)
+        If IsArray(x_min) Then
+            For i = 1 To n
+                xmin(i) = x_min(i)
+            Next i
+        Else
+            For i = 1 To n
+                xmin(i) = x_min
+            Next i
+        End If
+        ReDim z_l(1 To n)       'slack variable x-z_l=x_min
+        ReDim s_l(1 To n)       'complementary s_l*z_l=mu
+        For i = 1 To n
+            z_l(i) = max2(x(i) - xmin(i), 1# / n)
+            s_l(i) = max2(z_l(i), 1)
+        Next i
+    End If
+
+    'Check if there is an upper bound on x
+    isMax = False
+    If IsNull(x_max) = False Then
+        isMax = True
+        ReDim xmax(1 To n)
+        If IsArray(x_max) Then
+            For i = 1 To n
+                xmax(i) = x_max(i)
+            Next i
+        Else
+            For i = 1 To n
+                xmax(i) = x_max
+            Next i
+        End If
+        ReDim z_u(1 To n)       'slack variable x+z_u=x_max
+        ReDim s_u(1 To n)       'complementary s_u*z_u=mu
+        For i = 1 To n
+            z_u(i) = max2(xmax(i) - x(i), 1# / n)
+            s_u(i) = max2(z_u(i), 1)
+        Next i
+    End If
+
+    'Check if there are linear inequality constraints: Cx<U
+    isMaxC = False: n_cu = 0
+    If IsNull(C_u) = False And IsNull(c_max) = False Then
+        isMaxC = True
+        n_cu = UBound(C_u, 1)
+        ReDim cmax(1 To n_cu)
+        ReDim C(1 To n, 1 To n_cu)
+        For j = 1 To n
+            For i = 1 To n_cu
+                C(j, i) = C_u(i, j)
+            Next i
+        Next j
+        If IsArray(c_max) Then
+            For i = 1 To n_cu
+                cmax(i) = c_max(i)
+            Next i
+        Else
+            For i = 1 To n_cu
+                cmax(i) = c_max
+            Next i
+        End If
+    End If
+
+    'Check if there are linear inequality constraints: Cx>L, transform it to -Cx<-L
+    If IsNull(C_l) = False And IsNull(c_min) = False Then
+        isMaxC = True
+        n_cl = UBound(C_l, 1)
+        If n_cu = 0 Then
+            ReDim cmax(1 To n_cl)
+            ReDim C(1 To n, 1 To n_cl)
+        Else
+            ReDim Preserve cmax(1 To n_cu + n_cl)
+            ReDim Preserve C(1 To n, 1 To n_cu + n_cl)
+        End If
+        For i = 1 To n_cl
+            k = n_cu + i
+            For j = 1 To n
+               C(j, k) = -C_l(i, j)
+            Next j
+        Next i
+        If IsArray(c_min) Then
+            For i = 1 To n_cl
+                cmax(n_cu + i) = -c_min(i)
+            Next i
+        Else
+            For i = 1 To n_cl
+                cmax(n_cu + i) = -c_min
+            Next i
+        End If
+        n_cu = n_cu + n_cl
+    End If
+    
+    If isMaxC = True Then
+        'Transpose C() to usual form
+        tmp_vec = C
+        ReDim C(1 To n_cu, 1 To n)
+        For i = 1 To n_cu
+            For j = 1 To n
+                C(i, j) = tmp_vec(j, i)
+            Next j
+        Next i
+        tmp_vec = modMath.M_Dot(C, x)
+        ReDim z_cu(1 To n_cu)        'Slack variable C.x+z_u=cmax
+        ReDim s_cu(1 To n_cu)       'Complemetary variable z_u.s_zu=mu
+        For i = 1 To n_cu
+            z_cu(i) = max2(cmax(i) - tmp_vec(i), 1# / n_cu)
+            s_cu(i) = z_cu(i)
+        Next i
+        Erase tmp_vec
+    End If
+    
+    'Constant part of the Jacobian
+    ReDim Jacob(1 To n + 2, 1 To n + 2)
+    Jacob(n + 1, n + 1) = -2 * n
+    For i = 1 To n
+        Jacob(i, n + 2) = 1
+        Jacob(n + 2, i) = 1
+    Next i
+    
+    iterate = 0
+    chk1_prv = Exp(70): chk2_prv = chk1_prv: chk3_prv = chk3
+    stall_1 = 0: stall_2 = 0: stall_3 = 0
+    Do
+        
+        chk2 = 0
+        chk3 = 0
+        
+        '=======================================
+        'Find current mu=<x.s>
+        '=======================================
+        mu = 0: k = 0
+        If isMin = True Then Call Calc_mu_increment(mu, z_l, s_l, k)
+        If isMax = True Then Call Calc_mu_increment(mu, z_u, s_u, k)
+        If isMaxC = True Then Call Calc_mu_increment(mu, z_cu, s_cu, k)
+        If k > 0 Then mu = mu / k
+        chk1 = mu
+        
+        '======================================
+        'Update Jacobian
+        '======================================
+        For i = 1 To n - 1
+            For j = i + 1 To n
+                Jacob(i, j) = 0
+            Next j
+        Next i
+        
+        tau = 0
+        ReDim Qx(1 To n)
+        ReDim tmp_vec(1 To n)
+        For i = 1 To n
+            tmp_x = 0
+            For j = 1 To n
+                tmp_x = tmp_x + x_covar(i, j) * x(j)
+            Next j
+            Qx(i) = tmp_x
+            tmp_vec(i) = x(i) * tmp_x
+            Jacob(i, n + 1) = 4 * tmp_x
+            Jacob(n + 1, i) = 4 * tmp_x
+            Jacob(i, i) = -2 * (tmp_x ^ 2)
+            tau = tau + tmp_vec(i)
+        Next i
+        tau = tau / n
+        
+        For i = 1 To n
+            For j = i To n
+                tmp_x = 0
+                For k = 1 To n
+                    tmp_x = tmp_x + x_covar(k, i) * x_covar(k, j) * (x(k) ^ 2)
+                Next k
+                tmp_x = 2 * tmp_x + 4 * x_covar(i, j) * (tmp_vec(i) + tmp_vec(j) - tau)
+                Jacob(i, j) = Jacob(i, j) - tmp_x
+            Next j
+        Next i
+        
+        '======================================
+        'Update KKT
+        '======================================
+        ReDim f(1 To n + 2)
+        tmp_x = 0
+        For i = 1 To n
+            tmp_z = 0
+            For j = 1 To n
+                tmp_z = tmp_z + (x(j) ^ 2) * Qx(j) * x_covar(j, i)
+            Next j
+            f(i) = 2 * Qx(i) * (tmp_vec(i) - 2 * tau) + 2 * tmp_z
+            tmp_x = tmp_x + x(i)
+        Next i
+        f(n + 2) = -(tmp_x - 1)
+        chk2 = Abs(f(n + 2))
+        f_chk3 = f: ReDim Preserve f_chk3(1 To n)
+        Erase Qx, tmp_vec
+        
+        '=======================================
+        'Adjust Jacobian and KKT for constraints
+        '=======================================
+        If isMin = True Then
+            ReDim err_l(1 To n)
+            For i = 1 To n
+                err_l(i) = x(i) - z_l(i) - xmin(i)
+                f(i) = f(i) + err_l(i) * s_l(i) / z_l(i)
+                Jacob(i, i) = Jacob(i, i) - s_l(i) / z_l(i)
+                f_chk3(i) = f_chk3(i) - s_l(i)
+            Next i
+            chk2 = max2(chk2, MaxNorm_vec(err_l))
+        End If
+
+        If isMax = True Then
+            ReDim err_u(1 To n)
+            For i = 1 To n
+                err_u(i) = x(i) + z_u(i) - xmax(i)
+                f(i) = f(i) + err_u(i) * s_u(i) / z_u(i)
+                Jacob(i, i) = Jacob(i, i) - s_u(i) / z_u(i)
+                f_chk3(i) = f_chk3(i) + s_u(i)
+            Next i
+            chk2 = max2(chk2, MaxNorm_vec(err_u))
+        End If
+
+        If isMaxC = True Then
+            ReDim err_cu(1 To n_cu)
+            For i = 1 To n_cu
+                tmp_x = 0
+                For j = 1 To n
+                    tmp_x = tmp_x + C(i, j) * x(j)
+                Next j
+                err_cu(i) = tmp_x + z_cu(i) - cmax(i)
+                tmp_x = err_cu(i) * s_cu(i) / z_cu(i)
+                For j = 1 To n
+                    f(j) = f(j) + C(i, j) * tmp_x
+                Next j
+            Next i
+            For k = 1 To n_cu
+                tmp_x = s_cu(k) / z_cu(k)
+                For i = 1 To n
+                    Jacob(i, i) = Jacob(i, i) - (C(k, i) ^ 2) * tmp_x
+                Next i
+                For i = 1 To n - 1
+                    For j = i + 1 To n
+                        Jacob(i, j) = Jacob(i, j) - C(k, i) * C(k, j) * tmp_x
+                    Next j
+                Next i
+            Next k
+            chk2 = max2(chk2, MaxNorm_vec(err_cu))
+            For i = 1 To n
+                For j = 1 To n_cu
+                    f_chk3(i) = f_chk3(i) + C(j, i) * s_cu(j)
+                Next j
+            Next i
+        End If
+        chk3 = MaxNorm_vec(f_chk3): Erase f_chk3
+        
+        'Symmetrize Jacobian and perform LDL decomposition
+        For i = 1 To n - 1
+            For j = i + 1 To n
+                Jacob(j, i) = Jacob(i, j)
+            Next j
+        Next i
+        Call modMath.LDL_Decompose(Jacob, LDL_L, LDL_D)
+
+        '=======================================
+        'check for convergence
+        '=======================================
+        If (chk1 < tol And chk2 < tol And chk3 < tol) Then Exit Do
+        Call conv_chk(chk1, chk2, chk3, chk1_prv, chk2_prv, chk3_prv, stall_1, stall_2, stall_3)
+        If stall_1 > 10 Or stall_2 > 10 Or stall_3 > 10 Then
+            Debug.Print "mQPSolve:Equal_Risk_Port:Stalling..."
+            Exit Do
+        End If
+
+        '============================================
+        'Solve for Affine solution
+        '============================================
+        If Solve_LDL_Equation(LDL_L, LDL_D, f, d) = False Then Exit Do
+
+       '============================================
+        'Calculate delta()=d_x()*d_s() to be used in correction step
+        '============================================
+        ReDim d_x(1 To n)
+        For i = 1 To n
+            d_x(i) = d(i)
+        Next i
+        If isMin = True Then
+            ReDim d_z_l(1 To n)
+            ReDim d_s_l(1 To n)
+            ReDim delta_l(1 To n)
+            For i = 1 To n
+                d_z_l(i) = err_l(i) + d_x(i)
+                d_s_l(i) = (-s_l(i) * d_z_l(i)) / z_l(i) - s_l(i)
+                delta_l(i) = d_z_l(i) * d_s_l(i)
+            Next i
+        End If
+        
+        If isMax = True Then
+            ReDim d_z_u(1 To n)
+            ReDim d_s_u(1 To n)
+            ReDim delta_u(1 To n)
+            For i = 1 To n
+                d_z_u(i) = -(err_u(i) + d_x(i))
+                d_s_u(i) = (-s_u(i) * d_z_u(i)) / z_u(i) - s_u(i)
+                delta_u(i) = d_z_u(i) * d_s_u(i)
+            Next i
+        End If
+        
+        If isMaxC = True Then
+            ReDim d_z_cu(1 To n_cu)
+            ReDim d_s_cu(1 To n_cu)
+            ReDim delta_cu(1 To n_cu)
+            For i = 1 To n_cu
+                tmp_x = 0
+                For j = 1 To n
+                    tmp_x = tmp_x + C(i, j) * d_x(j)
+                Next j
+                d_z_cu(i) = -(err_cu(i) + tmp_x)
+                d_s_cu(i) = (-s_cu(i) * d_z_cu(i)) / z_cu(i) - s_cu(i)
+                delta_cu(i) = d_z_cu(i) * d_s_cu(i)
+            Next i
+        End If
+        
+        '============================================
+        'Find mu_affine and sigma
+        '============================================
+        alpha = 1: alpha_s = 1
+        If isMin = True Then Call Backtrack_stepsize(alpha, z_l, d_z_l)
+        If isMax = True Then Call Backtrack_stepsize(alpha, z_u, d_z_u)
+        If isMaxC = True Then Call Backtrack_stepsize(alpha, z_cu, d_z_cu)
+        If isMin = True Then Call Backtrack_stepsize(alpha_s, s_l, d_s_l)
+        If isMax = True Then Call Backtrack_stepsize(alpha_s, s_u, d_s_u)
+        If isMaxC = True Then Call Backtrack_stepsize(alpha_s, s_cu, d_s_cu)
+    
+        mu_affin = 0: k = 0
+        If isMin = True Then Call Calc_mu_increment_affin(mu_affin, z_l, s_l, d_z_l, d_s_l, alpha, alpha_s, k)
+        If isMax = True Then Call Calc_mu_increment_affin(mu_affin, z_u, s_u, d_z_u, d_s_u, alpha, alpha_s, k)
+        If isMaxC = True Then Call Calc_mu_increment_affin(mu_affin, z_cu, s_cu, d_z_cu, d_s_cu, alpha, alpha_s, k)
+        If k > 0 Then mu_affin = mu_affin / k
+        sigma = min2(1, (mu_affin / mu) ^ 3)
+        sigma_mu = sigma * mu
+
+        '==============================================
+        'Solve for corrected directions
+        '==============================================
+        If isMin = True Then
+            For i = 1 To n
+                f(i) = f(i) - (sigma_mu - delta_l(i)) / z_l(i)
+            Next i
+        End If
+        If isMax = True Then
+            For i = 1 To n
+                f(i) = f(i) + (sigma_mu - delta_u(i)) / z_u(i)
+            Next i
+        End If
+        If isMaxC = True Then
+            For j = 1 To n_cu
+                tmp_x = (sigma_mu - delta_cu(j)) / z_cu(j)
+                For i = 1 To n
+                    f(i) = f(i) + tmp_x * C(j, i)
+                Next i
+            Next j
+        End If
+        If Solve_LDL_Equation(LDL_L, LDL_D, f, d) = False Then Exit Do
+        Erase LDL_L, LDL_D, f
+        
+        '==============================================
+        'Read out change directions
+        '==============================================
+        ReDim d_x(1 To n)
+        For i = 1 To n
+            d_x(i) = d(i)
+        Next i
+        d_tau = d(n + 1)
+        d_lambda = d(n + 1)
+        
+        If isMin = True Then
+            ReDim d_z_l(1 To n)
+            ReDim d_s_l(1 To n)
+            For i = 1 To n
+                d_z_l(i) = err_l(i) + d_x(i)
+                d_s_l(i) = (-s_l(i) * d_z_l(i) + sigma_mu - delta_l(i)) / z_l(i) - s_l(i)
+            Next i
+        End If
+        
+        If isMax = True Then
+            ReDim d_z_u(1 To n)
+            ReDim d_s_u(1 To n)
+            For i = 1 To n
+                d_z_u(i) = -(err_u(i) + d_x(i))
+                d_s_u(i) = (-s_u(i) * d_z_u(i) + sigma_mu - delta_u(i)) / z_u(i) - s_u(i)
+            Next i
+        End If
+        
+         If isMaxC = True Then
+            ReDim d_z_cu(1 To n_cu)
+            ReDim d_s_cu(1 To n_cu)
+            For i = 1 To n_cu
+                tmp_x = 0
+                For j = 1 To n
+                    tmp_x = tmp_x + C(i, j) * d_x(j)
+                Next j
+                d_z_cu(i) = -(err_cu(i) + tmp_x)
+                d_s_cu(i) = (-s_cu(i) * d_z_cu(i) + sigma_mu - delta_cu(i)) / z_cu(i) - s_cu(i)
+            Next i
+        End If
+        
+        '==============================================
+        'Update variables
+        '==============================================
+        alpha = 1: alpha_s = 1
+        If isMin = True Then Call Backtrack_stepsize(alpha, z_l, d_z_l)
+        If isMax = True Then Call Backtrack_stepsize(alpha, z_u, d_z_u)
+        If isMaxC = True Then Call Backtrack_stepsize(alpha, z_cu, d_z_cu)
+        If isMin = True Then Call Backtrack_stepsize(alpha_s, s_l, d_s_l)
+        If isMax = True Then Call Backtrack_stepsize(alpha_s, s_u, d_s_u)
+        If isMaxC = True Then Call Backtrack_stepsize(alpha_s, s_cu, d_s_cu)
+        alpha = min2(1, 0.95 * alpha): alpha_s = min2(1, 0.95 * alpha_s)
+        
+        For i = 1 To n
+            x(i) = x(i) + alpha * d_x(i)
+        Next i
+        'tau = tau + alpha * d_tau
+        lambda = lambda + alpha_s * d_lambda
+        If isMin = True Then Call Update_Solution(alpha, alpha_s, z_l, s_l, d_z_l, d_s_l, z_tol)
+        If isMax = True Then Call Update_Solution(alpha, alpha_s, z_u, s_u, d_z_u, d_s_u, z_tol)
+        If isMaxC = True Then Call Update_Solution(alpha, alpha_s, z_cu, s_cu, d_z_cu, d_s_cu, z_tol)
+        
+        '==============================================
+        'Release memories
+        '==============================================
+        Erase f, d, d_x, err_l, err_u, err_cu
+        Erase d_z_l, d_s_l, d_z_u, d_s_u, d_z_cu, d_s_cu
+        Erase delta_l, delta_u, delta_cu
+
+        iterate = iterate + 1
+        If iterate Mod 50 = 0 Then
+            DoEvents
+            Application.StatusBar = "QPSolve:Match_Return_Vol: " & iterate & "/" & iter_max
+        End If
+        Debug.Print iterate & ", " & Format(chk1, "0.00E+") & ", " & _
+                        Format(chk2, "0.00E+") & ", " & Format(chk3, "0.00E+") & ", " & _
+                        stall_1 & ", " & stall_2 & ", " & stall_3
+    Loop While iterate <= iter_max
+    Erase Jacob, C, Qx
+    
+    Debug.Print "Iterations= " & iterate & "/" & iter_max
+    If (chk1 > tol Or chk2 > tol Or chk3 > tol) Then
+        Debug.Print "QPSolve:Equal_Risk_Port: failed to converge. (chk1, chk2, chk3)= (" _
+                & Format(chk1, "0.00E+") & ", " & Format(chk2, "0.00E+") & ", " & Format(chk3, "0.00E+") & ") (" _
+                & iterate & "/" & iter_max & ")"
+        Equal_Risk_Port = False
+    Else
+        Equal_Risk_Port = True
+    End If
+    
+    Erase z_l, s_l, xmin
+    Erase z_u, s_u, xmax
+    Erase z_cu, s_cu, cmax
+    Application.StatusBar = False
+End Function
